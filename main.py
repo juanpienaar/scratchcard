@@ -59,6 +59,7 @@ class Game(Base):
     match_basis = Column(String(20), default="stableford")  # stableford | scratch
     handicap_mode = Column(String(40), default="full")  # full | off_lowest | off_lowest_pct
     handicap_pct = Column(Float, default=100.0)
+    finished = Column(Integer, default=0)   # 0 = in progress, 1 = finished/saved
     created_at = Column(String(40), default=lambda: datetime.utcnow().isoformat())
 
 
@@ -330,6 +331,7 @@ def startup():
             "ALTER TABLE games ADD COLUMN main_game VARCHAR(40) DEFAULT 'individual_stableford'",
             "ALTER TABLE games ADD COLUMN side_game VARCHAR(40)",
             "ALTER TABLE games ADD COLUMN match_basis VARCHAR(20) DEFAULT 'stableford'",
+            "ALTER TABLE games ADD COLUMN finished INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(text(stmt))
@@ -606,6 +608,7 @@ def _game_state(token: str, db: Session) -> dict:
         "main_game": g.main_game, "side_game": g.side_game,
         "match_basis": g.match_basis,
         "handicap_mode": g.handicap_mode, "handicap_pct": g.handicap_pct,
+        "finished": bool(g.finished), "created_at": g.created_at,
         "par": json.loads(g.par_json), "si": json.loads(g.si_json),
         "players": [{"id": p.id, "name": p.name, "handicap_index": p.handicap_index,
                      "course_handicap": p.course_handicap, "team": p.team,
@@ -645,3 +648,54 @@ def upsert_score(token: str, body: ScoreIn, db: Session = Depends(get_db)):
 @app.get("/api/games/{token}/leaderboard")
 def leaderboard(token: str, db: Session = Depends(get_db)):
     return _game_state(token, db)["leaderboard"]
+
+
+@app.post("/api/games/{token}/finish")
+def finish_game(token: str, db: Session = Depends(get_db)):
+    g = db.query(Game).filter(Game.token == token).first()
+    if not g:
+        raise HTTPException(404, "Game not found")
+    g.finished = 1
+    db.commit()
+    return {"ok": True, "finished": True}
+
+
+@app.get("/api/games")
+def list_games(db: Session = Depends(get_db)):
+    games = db.query(Game).order_by(Game.id.desc()).all()
+    out = []
+    for g in games:
+        players = db.query(GamePlayer).filter(GamePlayer.game_id == g.id).all()
+        scores = db.query(Score).filter(Score.game_id == g.id).all()
+        leader = None
+        try:
+            board = build_leaderboard(g, players, scores)
+            indiv = board.get("individual") or []
+            holes_played = max(
+                (sum(1 for h in p["holes"] if h.get("gross") is not None) for p in indiv),
+                default=0,
+            )
+            if indiv:
+                top = indiv[0]
+                leader = {"name": top["name"], "points": top["points"]}
+        except Exception:
+            holes_played = 0
+        out.append({
+            "token": g.token, "name": g.name, "course_name": g.course_name,
+            "created_at": g.created_at, "finished": bool(g.finished),
+            "players": len(players), "holes_played": holes_played,
+            "main_game": g.main_game, "side_game": g.side_game, "leader": leader,
+        })
+    return out
+
+
+@app.delete("/api/games/{token}")
+def delete_game(token: str, db: Session = Depends(get_db)):
+    g = db.query(Game).filter(Game.token == token).first()
+    if not g:
+        raise HTTPException(404, "Game not found")
+    db.query(Score).filter(Score.game_id == g.id).delete()
+    db.query(GamePlayer).filter(GamePlayer.game_id == g.id).delete()
+    db.delete(g)
+    db.commit()
+    return {"ok": True, "deleted": token}
