@@ -56,6 +56,7 @@ class Game(Base):
     game_types_json = Column(Text, default="[]")   # [main, side] subset
     main_game = Column(String(40), default="individual_stableford")
     side_game = Column(String(40), nullable=True)
+    match_basis = Column(String(20), default="stableford")  # stableford | scratch
     handicap_mode = Column(String(40), default="full")  # full | off_lowest | off_lowest_pct
     handicap_pct = Column(Float, default=100.0)
     created_at = Column(String(40), default=lambda: datetime.utcnow().isoformat())
@@ -172,7 +173,7 @@ def build_leaderboard(game: Game, players: List[GamePlayer], scores: List[Score]
         }
 
     result = {"par": par, "si": si, "game_types": types,
-              "individual": [], "teams": [], "skins": None}
+              "individual": [], "teams": [], "skins": None, "matchplay": None}
 
     # Individual Stableford leaderboard (all players, across groups)
     indiv = sorted(pdata.values(), key=lambda d: (-d["points"], d["name"]))
@@ -237,7 +238,84 @@ def build_leaderboard(game: Game, players: List[GamePlayer], scores: List[Score]
             key=lambda d: -d["skins"])
         result["skins"] = {"holes": skin_holes, "board": skin_board, "carry": carry}
 
+    # Match play (2 sides: two teams, or two players)
+    if "match_play" in types:
+        result["matchplay"] = build_matchplay(pdata, players, game.match_basis or "stableford")
+
     return result
+
+
+def build_matchplay(pdata: dict, players: List[GamePlayer], basis: str) -> dict:
+    # Determine the two sides
+    teams = {}
+    for p in players:
+        if p.team is not None:
+            teams.setdefault(p.team, []).append(p.id)
+    if len(teams) >= 2:
+        tks = sorted(teams.keys())[:2]
+        sides = [{"label": f"Team {tks[0]}", "ids": teams[tks[0]]},
+                 {"label": f"Team {tks[1]}", "ids": teams[tks[1]]}]
+    elif len(players) == 2:
+        sides = [{"label": players[0].name, "ids": [players[0].id]},
+                 {"label": players[1].name, "ids": [players[1].id]}]
+    else:
+        return {"error": "Match play needs exactly 2 players or 2 teams."}
+
+    def side_value(ids, h):
+        # best contribution of the side on hole h (1-based)
+        vals = []
+        for pid in ids:
+            cell = pdata[pid]["holes"][h - 1]
+            if cell["gross"] is None:
+                continue
+            if basis == "scratch":
+                vals.append(cell["gross"])      # gross strokes, lower better
+            else:
+                vals.append(cell["points"])     # stableford pts, higher better
+        if not vals:
+            return None
+        return min(vals) if basis == "scratch" else max(vals)
+
+    a_wins = b_wins = halves = thru = 0
+    hole_results = []
+    for h in range(1, 19):
+        va = side_value(sides[0]["ids"], h)
+        vb = side_value(sides[1]["ids"], h)
+        if va is None or vb is None:
+            break   # match is sequential; stop at first unfinished hole
+        thru += 1
+        if va == vb:
+            halves += 1
+            res = "halved"
+        elif (va < vb) == (basis == "scratch"):
+            a_wins += 1
+            res = "A"
+        else:
+            b_wins += 1
+            res = "B"
+        hole_results.append({"hole": h, "result": res})
+
+    up = a_wins - b_wins
+    remaining = 18 - thru
+    leader = sides[0]["label"] if up > 0 else sides[1]["label"]
+    if thru == 0:
+        status = "Not started"
+    elif abs(up) > remaining and up != 0:
+        status = f"{leader} win {abs(up)} & {remaining}" if remaining > 0 else f"{leader} win {abs(up)} up"
+    elif thru == 18:
+        status = "Match halved" if up == 0 else f"{leader} win {abs(up)} up"
+    else:
+        if up == 0:
+            status = f"All square thru {thru}"
+        else:
+            status = f"{leader} {abs(up)} up thru {thru}"
+
+    return {
+        "basis": basis,
+        "sideA": sides[0]["label"], "sideB": sides[1]["label"],
+        "a_wins": a_wins, "b_wins": b_wins, "halves": halves,
+        "thru": thru, "status": status, "holes": hole_results,
+    }
 
 
 # ----------------------------- App -----------------------------
@@ -253,6 +331,7 @@ def startup():
             "ALTER TABLE courses ADD COLUMN is_favourite INTEGER DEFAULT 0",
             "ALTER TABLE games ADD COLUMN main_game VARCHAR(40) DEFAULT 'individual_stableford'",
             "ALTER TABLE games ADD COLUMN side_game VARCHAR(40)",
+            "ALTER TABLE games ADD COLUMN match_basis VARCHAR(20) DEFAULT 'stableford'",
         ]:
             try:
                 conn.execute(text(stmt))
@@ -454,6 +533,7 @@ class GameIn(BaseModel):
     slope: float = 113.0
     main_game: str = "individual_stableford"
     side_game: Optional[str] = None
+    match_basis: str = "stableford"
     game_types: List[str] = []
     handicap_mode: str = "full"
     handicap_pct: float = 100.0
@@ -470,6 +550,7 @@ def create_game(body: GameIn, db: Session = Depends(get_db)):
              par_json=json.dumps(body.par), si_json=json.dumps(body.si),
              tee_name=body.tee_name, rating=body.rating, slope=body.slope,
              game_types_json=json.dumps(types), main_game=main, side_game=side,
+             match_basis=body.match_basis or "stableford",
              handicap_mode=body.handicap_mode, handicap_pct=body.handicap_pct)
     db.add(g)
     db.commit()
@@ -495,6 +576,7 @@ def _game_state(token: str, db: Session) -> dict:
         "tee_name": g.tee_name, "rating": g.rating, "slope": g.slope,
         "game_types": json.loads(g.game_types_json),
         "main_game": g.main_game, "side_game": g.side_game,
+        "match_basis": g.match_basis,
         "handicap_mode": g.handicap_mode, "handicap_pct": g.handicap_pct,
         "par": json.loads(g.par_json), "si": json.loads(g.si_json),
         "players": [{"id": p.id, "name": p.name, "handicap_index": p.handicap_index,
