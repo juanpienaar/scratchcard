@@ -172,6 +172,7 @@
     <div class="card p-5 mb-4">
       <h3 class="font-semibold mb-1">5 · Players</h3>
       <p class="text-xs text-slate-500 mb-3">Group = fourball. Course handicap auto-fills from the selected tee — edit if needed.</p>
+      <div id="teamHint" class="text-xs mb-3" style="display:none;background:#0b2545;border:1px solid #1e3a5f;border-radius:.5rem;padding:.5rem .7rem;color:#93c5fd"></div>
       <datalist id="savedPlayers"></datalist>
       <div id="playersList" class="space-y-2 mb-3"></div>
       <button class="btn btn-ghost" style="padding:.4rem .8rem;font-size:.85rem" onclick="addPlayer()">+ Add player</button>
@@ -438,11 +439,13 @@ function recalcAllCH(){
   renderPlayers();
 }
 function renderPlayers(){
-  const teamOn = S.formats.includes('better_ball_stableford');
+  const teamOn = S.formats.includes('better_ball_stableford') || S.formats.includes('match_play');
   const el=$('playersList'); el.innerHTML='';
+  const teamOpts=p=>['<option value="">No team</option>']
+      .concat([1,2,3,4].map(t=>`<option value="${t}" ${p.team===t?'selected':''}>Team ${t}</option>`)).join('');
   S.players.forEach((p,i)=>{
     el.insertAdjacentHTML('beforeend',
-     `<div style="background:#0f172a;border:1px solid #334155;border-radius:.6rem;padding:.6rem">
+     `<div style="background:#0f172a;border:1px solid ${teamOn&&p.team?'#15803d':'#334155'};border-radius:.6rem;padding:.6rem">
         <div class="flex gap-2 items-center mb-2">
           <input class="input" list="savedPlayers" placeholder="Name" value="${p.name}" onchange="onPlayerName(${i},this.value)">
           <button class="btn btn-ghost" style="padding:.3rem .6rem" onclick="S.players.splice(${i},1);renderPlayers()">✕</button>
@@ -455,10 +458,31 @@ function renderPlayers(){
           <div><div class="text-xs text-slate-500">Group</div>
             <input class="input" type="number" min="1" value="${p.group_no}" onchange="S.players[${i}].group_no=+this.value"></div>
           ${teamOn?`<div><div class="text-xs text-slate-500">Team</div>
-            <input class="input" type="number" min="1" value="${p.team||''}" placeholder="—" onchange="S.players[${i}].team=this.value?+this.value:null"></div>`:''}
+            <select class="input" onchange="S.players[${i}].team=this.value?+this.value:null;renderPlayers()">${teamOpts(p)}</select></div>`:''}
         </div>
       </div>`);
   });
+  renderTeamHint(teamOn);
+}
+function renderTeamHint(teamOn){
+  const el=$('teamHint'); if(!el) return;
+  if(!teamOn){ el.style.display='none'; return; }
+  const named=S.players.filter(p=>p.name.trim());
+  const sizes={}; named.forEach(p=>{ if(p.team) sizes[p.team]=(sizes[p.team]||0)+1; });
+  const teams=Object.keys(sizes).map(Number).sort();
+  const counts=teams.map(t=>`Team ${t}: ${sizes[t]}`).join(' · ')||'no teams yet';
+  let need='';
+  if(S.formats.includes('match_play')){
+    need = teams.length===0
+      ? ' — Match play: assign 2 balanced teams, or leave all blank for a 2-player singles match.'
+      : (teams.length===2 && sizes[teams[0]]===sizes[teams[1]])
+        ? ' — ✓ balanced match.'
+        : ' — Match play needs exactly 2 teams with equal players.';
+  } else if(S.formats.includes('better_ball_stableford')){
+    need = teams.length>=2 ? ' — ✓ ready.' : ' — Better-ball needs at least 2 teams.';
+  }
+  el.innerHTML=`<strong>Teams:</strong> use the Team dropdown on each player. ${counts}${need}`;
+  el.style.display='block';
 }
 function onPlayerName(i,val){
   S.players[i].name=val;
