@@ -79,29 +79,41 @@
     <!-- Course -->
     <div class="card p-5 mb-4">
       <h3 class="font-semibold mb-3">1 · Course</h3>
-      <div class="flex gap-2 mb-3 flex-wrap">
-        <button class="chip" id="tabNearby" onclick="courseTab('nearby')">📍 Near me</button>
-        <button class="chip" id="tabSaved" onclick="courseTab('saved')">⭐ Saved</button>
-        <button class="chip on" id="tabManual" onclick="courseTab('manual')">✏️ Manual</button>
+
+      <!-- Picker (shown until a course is chosen) -->
+      <div id="coursePicker">
+        <div class="grid grid-cols-2 gap-2 mb-3">
+          <button class="btn btn-ghost" onclick="findNearby()">📍 Near me</button>
+          <button class="btn btn-ghost" onclick="$('photoInput').click()">📷 Scan scorecard</button>
+          <button class="btn btn-ghost" onclick="showFavourites()">⭐ Saved / favourites</button>
+          <button class="btn btn-ghost" onclick="manualCourse()">✏️ Enter manually</button>
+        </div>
+        <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" onchange="uploadPhoto(this)">
+        <div id="courseResults" class="space-y-1.5 text-sm"></div>
       </div>
 
-      <div id="paneNearby" style="display:none">
-        <button class="btn btn-ghost mb-2" onclick="findNearby()">Find courses near me</button>
-        <div id="nearbyList" class="space-y-1 text-sm"></div>
+      <!-- Selected (shown once chosen) -->
+      <div id="courseSelected" style="display:none">
+        <div class="flex items-center justify-between mb-3" style="background:#14532d;border:1px solid #22c55e;border-radius:.6rem;padding:.7rem .9rem">
+          <div>
+            <div class="font-semibold" id="selCourseName" style="color:#bbf7d0">⛳</div>
+            <div class="text-xs" id="selCourseMeta" style="color:#86efac"></div>
+          </div>
+          <button class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.8rem" onclick="changeCourse()">Change</button>
+        </div>
+        <input id="courseName" type="hidden">
+        <details>
+          <summary class="text-sm text-slate-400 cursor-pointer mb-2 select-none">Edit name, holes &amp; stroke index</summary>
+          <label class="text-sm text-slate-400">Course name</label>
+          <input id="courseNameEdit" class="input mt-1 mb-3" placeholder="e.g. Royal Cape Golf Club" onchange="onCourseNameEdit(this.value)">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-slate-400">Holes (par &amp; stroke index)</span>
+            <button class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.8rem" onclick="loadStandard()">Reset standard par 72</button>
+          </div>
+          <div id="holesEditor" class="grid grid-cols-2 gap-2 mb-2"></div>
+          <p class="text-xs text-slate-500" id="parTotal"></p>
+        </details>
       </div>
-      <div id="paneSaved" style="display:none">
-        <select id="savedCourse" class="input" onchange="loadSavedCourse()"><option value="">Select a saved course…</option></select>
-      </div>
-
-      <label class="text-sm text-slate-400">Course name</label>
-      <input id="courseName" class="input mt-1 mb-3" placeholder="e.g. Royal Cape Golf Club" />
-
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-sm text-slate-400">Holes (par &amp; stroke index)</span>
-        <button class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.8rem" onclick="loadStandard()">Load standard par 72</button>
-      </div>
-      <div id="holesEditor" class="grid grid-cols-2 gap-2 mb-2"></div>
-      <p class="text-xs text-slate-500" id="parTotal"></p>
     </div>
 
     <!-- Tees -->
@@ -242,19 +254,95 @@ async function startSetup(){
   renderTees();
   if(!S.players.length){ S.players=[blankPlayer(),blankPlayer()]; }
   renderPlayers();
+  renderCourse();
   try{
     S.savedPlayers = await api('GET','/api/players');
     $('savedPlayers').innerHTML = S.savedPlayers.map(p=>`<option value="${p.name}">`).join('');
-    S.savedCourses = await api('GET','/api/courses');
-    $('savedCourse').innerHTML = '<option value="">Select a saved course…</option>'+
-      S.savedCourses.map((c,i)=>`<option value="${i}">${c.name}</option>`).join('');
   }catch(e){}
 }
-function courseTab(t){
-  ['nearby','saved','manual'].forEach(x=>{ $('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('on', x===t); });
-  $('paneNearby').style.display = t==='nearby'?'block':'none';
-  $('paneSaved').style.display = t==='saved'?'block':'none';
+
+// ----- course picker -----
+function renderCourse(){
+  if(S.courseSelected){
+    $('coursePicker').style.display='none';
+    $('courseSelected').style.display='block';
+    const nm=($('courseName').value||'').trim();
+    $('selCourseName').textContent = nm || '⛳ Unnamed course';
+    $('courseNameEdit').value = nm;
+    refreshCourseMeta();
+  } else {
+    $('coursePicker').style.display='block';
+    $('courseSelected').style.display='none';
+    $('courseResults').innerHTML='';
+  }
 }
+function refreshCourseMeta(){
+  if(!S.courseSelected) return;
+  $('selCourseMeta').textContent=`Par ${parTotal()} · ${S.holes.length} holes · ${S.tees.length} tee${S.tees.length===1?'':'s'}`;
+}
+function selectCourse(obj){
+  $('courseName').value = obj.name || '';
+  if(obj.par && obj.par.length){
+    S.holes = obj.par.map((p,k)=>({par:p||4, si:(obj.si&&obj.si[k])||k+1}));
+  } else if(!S.holes.length){ loadStandard(); }
+  if(obj.tees && obj.tees.length){
+    S.tees = obj.tees.map(t=>({name:t.name||'Tee', rating:t.rating||72, slope:t.slope||113}));
+    S.activeTee=0;
+  }
+  S.courseSelected = true;
+  renderCourse(); renderHoles(); renderTees(); recalcAllCH();
+}
+function changeCourse(){ S.courseSelected=false; renderCourse(); }
+function onCourseNameEdit(v){ $('courseName').value=v; $('selCourseName').textContent=v.trim()||'⛳ Unnamed course'; }
+
+function manualCourse(){
+  $('courseResults').innerHTML=
+   `<div class="flex gap-2">
+      <input id="manualName" class="input" placeholder="Course name">
+      <button class="btn btn-primary" onclick="confirmManual()">Add</button>
+    </div>`;
+  setTimeout(()=>{ const m=$('manualName'); if(m) m.focus(); },50);
+}
+function confirmManual(){
+  const nm=($('manualName')?$('manualName').value:'').trim();
+  if(!nm){ showToast('Enter a course name',true); return; }
+  selectCourse({name:nm, tees:S.tees});
+}
+
+async function showFavourites(){
+  let list=[];
+  try{ list=await api('GET','/api/courses'); }catch(e){}
+  S.savedCourses=list;
+  if(!list.length){ $('courseResults').innerHTML='<p class="text-slate-500">No saved courses yet. Scan a scorecard or add one manually.</p>'; return; }
+  $('courseResults').innerHTML=list.map((c,i)=>
+    `<div class="flex items-center gap-2" style="background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.45rem .6rem">
+       <button onclick="event.stopPropagation();toggleFav(${c.id},${i})" title="favourite" style="background:none;border:none;cursor:pointer;font-size:1.1rem">${c.is_favourite?'⭐':'☆'}</button>
+       <span style="flex:1;cursor:pointer" onclick="selectCourse(S.savedCourses[${i}])">${c.name}</span>
+       <button class="btn btn-ghost" style="padding:.2rem .6rem;font-size:.8rem" onclick="selectCourse(S.savedCourses[${i}])">Use</button>
+     </div>`).join('');
+}
+async function toggleFav(id,i){
+  try{ const r=await api('POST','/api/courses/'+id+'/favourite'); S.savedCourses[i].is_favourite=r.is_favourite; showFavourites(); }catch(e){}
+}
+
+async function uploadPhoto(input){
+  const f=input.files[0]; if(!f) return;
+  showToast('Reading scorecard…');
+  const fd=new FormData(); fd.append('file', f);
+  try{
+    const r=await fetch('/api/courses/parse-photo',{method:'POST',body:fd});
+    if(r.status===503){ showToast('Server needs an Anthropic API key',true); input.value=''; return; }
+    if(!r.ok){ showToast('Could not read scorecard',true); input.value=''; return; }
+    const data=await r.json();
+    selectCourse(data);
+    if(!data.name){
+      const d=document.querySelector('#courseSelected details'); if(d) d.open=true;
+      $('courseNameEdit').focus(); showToast('Scanned — add the club name');
+    } else { showToast('Scorecard scanned ✓'); }
+  }catch(e){ showToast('Upload failed',true); }
+  input.value='';
+}
+
 function loadStandard(){
   const pars=[4,4,5,3,4,4,3,5,4, 4,4,5,3,4,4,3,5,4];
   S.holes = pars.map((p,i)=>({par:p, si:i+1}));
@@ -277,6 +365,7 @@ function renderHoles(){
 function updateParTotal(){
   const t=S.holes.reduce((a,h)=>a+(+h.par||0),0);
   $('parTotal').textContent = `Par total: ${t} · ${S.holes.length} holes`;
+  refreshCourseMeta();
   recalcAllCH();
 }
 function renderTees(){
@@ -293,6 +382,7 @@ function renderTees(){
         <button class="btn btn-ghost" style="padding:.2rem .5rem" onclick="S.tees.splice(${i},1);if(S.activeTee>=S.tees.length)S.activeTee=0;renderTees();recalcAllCH()">✕</button>
       </div>`);
   });
+  refreshCourseMeta();
 }
 function addTee(){ S.tees.push({name:'Tee', rating:72, slope:113}); renderTees(); }
 
@@ -346,29 +436,23 @@ function onPlayerName(i,val){
 }
 function addPlayer(){ const last=S.players[S.players.length-1]; S.players.push({...blankPlayer(), group_no:last?last.group_no:1}); renderPlayers(); }
 
-async function findNearby(){
+function findNearby(){
   if(!navigator.geolocation){ showToast('No location support',true); return; }
   showToast('Locating…');
+  $('courseResults').innerHTML='<p class="text-slate-500">Finding courses near you…</p>';
   navigator.geolocation.getCurrentPosition(async pos=>{
     try{
       const {latitude,longitude}=pos.coords;
       const list=await api('GET',`/api/courses/nearby?lat=${latitude}&lon=${longitude}`);
-      if(!list.length){ $('nearbyList').innerHTML='<p class="text-slate-500">No courses found nearby.</p>'; return; }
-      $('nearbyList').innerHTML=list.map(c=>
-        `<div class="flex items-center justify-between" style="background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.45rem .6rem">
-           <span>${c.name}</span>
-           <button class="btn btn-ghost" style="padding:.2rem .6rem;font-size:.8rem" onclick="pickCourse('${c.name.replace(/'/g,'')}')">Use</button>
+      S.nearby=list;
+      if(!list.length){ $('courseResults').innerHTML='<p class="text-slate-500">No courses found nearby. Scan a scorecard or add manually.</p>'; return; }
+      $('courseResults').innerHTML=list.map((c,i)=>
+        `<div class="flex items-center gap-2" style="background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.45rem .6rem">
+           <span style="flex:1;cursor:pointer" onclick="selectCourse(S.nearby[${i}])">${c.name}</span>
+           <button class="btn btn-ghost" style="padding:.2rem .6rem;font-size:.8rem" onclick="selectCourse(S.nearby[${i}])">Use</button>
          </div>`).join('');
-    }catch(e){ showToast('Lookup failed',true); }
-  }, ()=>showToast('Location denied',true), {timeout:10000});
-}
-function pickCourse(name){ $('courseName').value=name; showToast('Course set — add holes/tees'); }
-function loadSavedCourse(){
-  const i=$('savedCourse').value; if(i==='') return;
-  const c=S.savedCourses[i];
-  $('courseName').value=c.name;
-  if(c.par&&c.par.length){ S.holes=c.par.map((p,k)=>({par:p, si:(c.si&&c.si[k])||k+1})); renderHoles(); }
-  if(c.tees&&c.tees.length){ S.tees=c.tees.map(t=>({...t})); S.activeTee=0; renderTees(); recalcAllCH(); }
+    }catch(e){ $('courseResults').innerHTML='<p class="text-slate-500">Lookup failed. Try again or add manually.</p>'; }
+  }, ()=>{ showToast('Location denied',true); $('courseResults').innerHTML=''; }, {timeout:10000});
 }
 
 async function createGame(){

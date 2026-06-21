@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Text, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 from datetime import datetime
 from typing import Optional, List
-import os, json, uuid, urllib.request, urllib.parse
+import os, json, uuid, base64, urllib.request, urllib.parse
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost/scratchcard")
 if DATABASE_URL.startswith("postgres://"):
@@ -39,6 +39,7 @@ class Course(Base):
     par_json = Column(Text, default="[]")      # list[18]
     si_json = Column(Text, default="[]")        # list[18]
     tees_json = Column(Text, default="[]")      # [{name,rating,slope}]
+    is_favourite = Column(Integer, default=0)
 
 
 class Game(Base):
@@ -247,6 +248,7 @@ def startup():
         for stmt in [
             "ALTER TABLE games ADD COLUMN handicap_pct FLOAT DEFAULT 100.0",
             "ALTER TABLE game_players ADD COLUMN group_no INTEGER DEFAULT 1",
+            "ALTER TABLE courses ADD COLUMN is_favourite INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(text(stmt))
@@ -312,22 +314,88 @@ class CourseIn(BaseModel):
 @app.get("/api/courses")
 def list_courses(db: Session = Depends(get_db)):
     out = []
-    for c in db.query(Course).order_by(Course.name).all():
+    courses = db.query(Course).order_by(Course.is_favourite.desc(), Course.name).all()
+    for c in courses:
         out.append({"id": c.id, "name": c.name, "lat": c.lat, "lon": c.lon,
                     "par": json.loads(c.par_json), "si": json.loads(c.si_json),
-                    "tees": json.loads(c.tees_json)})
+                    "tees": json.loads(c.tees_json),
+                    "is_favourite": bool(c.is_favourite)})
     return out
 
 
 @app.post("/api/courses")
 def create_course(body: CourseIn, db: Session = Depends(get_db)):
-    c = Course(name=body.name.strip(), lat=body.lat, lon=body.lon,
-               par_json=json.dumps(body.par), si_json=json.dumps(body.si),
-               tees_json=json.dumps(body.tees))
-    db.add(c)
+    # de-dup by name: update existing rather than create a second copy
+    c = db.query(Course).filter(Course.name == body.name.strip()).first()
+    if not c:
+        c = Course(name=body.name.strip())
+        db.add(c)
+    c.lat = body.lat
+    c.lon = body.lon
+    c.par_json = json.dumps(body.par)
+    c.si_json = json.dumps(body.si)
+    c.tees_json = json.dumps(body.tees)
     db.commit()
     db.refresh(c)
-    return {"id": c.id}
+    return {"id": c.id, "is_favourite": bool(c.is_favourite)}
+
+
+@app.post("/api/courses/{cid}/favourite")
+def toggle_favourite(cid: int, db: Session = Depends(get_db)):
+    c = db.query(Course).filter(Course.id == cid).first()
+    if not c:
+        raise HTTPException(404, "Course not found")
+    c.is_favourite = 0 if c.is_favourite else 1
+    db.commit()
+    return {"id": c.id, "is_favourite": bool(c.is_favourite)}
+
+
+def parse_scorecard(image_bytes: bytes, media_type: str) -> dict:
+    import anthropic
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    b64 = base64.standard_b64encode(image_bytes).decode()
+    prompt = (
+        "This is a photo of a golf scorecard. Read it carefully and extract:\n"
+        "- the course/club name\n"
+        "- for each of the 18 holes: its par and its stroke index (also called "
+        "handicap or 'HCP' / 'SI' on the card)\n"
+        "- any tee sets shown, with course rating and slope rating if visible\n\n"
+        "Return ONLY valid JSON, no markdown, no explanation, in exactly this shape:\n"
+        '{"name": string, "par": [18 integers], "si": [18 integers], '
+        '"tees": [{"name": string, "rating": number, "slope": number}]}\n'
+        "If the card only shows 9 holes, still return what you can. "
+        "If a value is not visible, use null. Stroke index values are 1-18, each used once."
+    )
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1500,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64",
+                                         "media_type": media_type, "data": b64}},
+            {"type": "text", "text": prompt},
+        ]}],
+    )
+    raw = msg.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = "\n".join(l for l in raw.splitlines() if not l.startswith("```"))
+    return json.loads(raw)
+
+
+@app.post("/api/courses/parse-photo")
+async def parse_photo(file: UploadFile = File(...)):
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        raise HTTPException(503, "ANTHROPIC_API_KEY not set on the server")
+    content = await file.read()
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(413, "Image too large (max 8MB)")
+    media_type = file.content_type or "image/jpeg"
+    if media_type not in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+        media_type = "image/jpeg"
+    try:
+        data = parse_scorecard(content, media_type)
+    except Exception as e:
+        raise HTTPException(502, f"Could not read scorecard: {e}")
+    return data
 
 
 @app.get("/api/courses/nearby")
