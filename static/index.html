@@ -147,8 +147,8 @@
       <div id="matchRow" class="mt-3" style="display:none">
         <label class="text-sm text-slate-400">Match play basis</label>
         <select id="matchBasis" class="input mt-1">
-          <option value="stableford">Stableford points per hole</option>
-          <option value="scratch">Scratch (gross, lowest wins)</option>
+          <option value="better_ball">Better ball (best Stableford in the side per hole)</option>
+          <option value="combined">Combined Stableford (sum of the side per hole)</option>
         </select>
       </div>
       <p class="text-xs text-slate-500 mt-2">Pick one main event and, optionally, one side game (e.g. better-ball team as the main, individual Stableford as the side). Match play needs exactly 2 players or 2 teams.</p>
@@ -486,11 +486,33 @@ function findNearby(){
   }, ()=>{ showToast('Location denied',true); $('courseResults').innerHTML=''; }, {timeout:10000});
 }
 
+function validateLineup(types, players){
+  const sizes={};
+  players.forEach(p=>{ if(p.team){ sizes[p.team]=(sizes[p.team]||0)+1; } });
+  const teams=Object.keys(sizes); const vals=Object.values(sizes);
+  if(types.includes('match_play')){
+    if(teams.length===0){
+      if(players.length!==2) return 'Match play needs exactly 2 players (singles) or 2 balanced teams.';
+    } else if(teams.length===2){
+      if(vals[0]!==vals[1]) return `Match play teams must be balanced — you have ${vals[0]} v ${vals[1]} players. Assign equal numbers to each team.`;
+    } else {
+      return `Match play needs exactly 2 teams, but ${teams.length} are assigned.`;
+    }
+  }
+  if(types.includes('better_ball_stableford') && teams.length<2){
+    return 'Better-ball needs at least 2 teams. Assign players to teams.';
+  }
+  return null;
+}
 async function createGame(){
   const name=$('courseName').value.trim();
   if(!name){ showToast('Enter a course name',true); return; }
   const players=S.players.filter(p=>p.name.trim());
   if(players.length<1){ showToast('Add at least one player',true); return; }
+  const main=$('mainGame').value, side=$('sideGame').value||null;
+  const types=[main].concat(side?[side]:[]);
+  const lineErr=validateLineup(types, players);
+  if(lineErr){ showToast(lineErr,true); return; }
   for(const p of players){
     if(!p.player_id){
       try{ const np=await api('POST','/api/players',{name:p.name.trim(), handicap_index:+p.handicap_index||0}); p.player_id=np.id; }catch(e){}
@@ -514,7 +536,11 @@ async function createGame(){
     $('shareLink').value=link;
     window._token=r.token;
     show('pageShare');
-  }catch(e){ showToast('Could not create round',true); }
+  }catch(e){
+    let msg='Could not create round';
+    try{ const d=JSON.parse(e.message); if(d.detail) msg=d.detail; }catch(_){}
+    showToast(msg,true);
+  }
 }
 function copyLink(){ const i=$('shareLink'); i.select(); navigator.clipboard.writeText(i.value); showToast('Link copied'); }
 function openScorecard(){ loadGame(window._token); }
@@ -664,7 +690,7 @@ function skinsHTML(kind){
 }
 function matchHTML(kind){
   const mp=G.leaderboard.matchplay; if(!mp) return '';
-  const basisTxt=mp.basis==='scratch'?'scratch (gross)':'Stableford';
+  const basisTxt=mp.basis==='combined'?'combined Stableford':'better ball';
   let h=`<div class="card p-4 mb-3"><div class="flex items-center gap-2 mb-2">${fmtBadge(kind)}<h3 class="font-semibold">Match Play</h3><span class="text-xs text-slate-500">${basisTxt}</span></div>`;
   if(mp.error){ return h+`<p class="text-slate-500 text-sm">${mp.error}</p></div>`; }
   h+=`<div class="text-center mb-3"><div class="text-lg font-bold" style="color:#4ade80">${mp.status}</div>

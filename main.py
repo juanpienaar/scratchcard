@@ -240,7 +240,7 @@ def build_leaderboard(game: Game, players: List[GamePlayer], scores: List[Score]
 
     # Match play (2 sides: two teams, or two players)
     if "match_play" in types:
-        result["matchplay"] = build_matchplay(pdata, players, game.match_basis or "stableford")
+        result["matchplay"] = build_matchplay(pdata, players, game.match_basis or "better_ball")
 
     return result
 
@@ -262,19 +262,17 @@ def build_matchplay(pdata: dict, players: List[GamePlayer], basis: str) -> dict:
         return {"error": "Match play needs exactly 2 players or 2 teams."}
 
     def side_value(ids, h):
-        # best contribution of the side on hole h (1-based)
+        # Stableford-based side contribution on hole h (1-based); higher is better.
+        # better_ball -> the single best ball in the side; combined -> sum of the side.
         vals = []
         for pid in ids:
             cell = pdata[pid]["holes"][h - 1]
-            if cell["gross"] is None:
+            if cell["points"] is None:
                 continue
-            if basis == "scratch":
-                vals.append(cell["gross"])      # gross strokes, lower better
-            else:
-                vals.append(cell["points"])     # stableford pts, higher better
+            vals.append(cell["points"])
         if not vals:
             return None
-        return min(vals) if basis == "scratch" else max(vals)
+        return sum(vals) if basis == "combined" else max(vals)
 
     a_wins = b_wins = halves = thru = 0
     hole_results = []
@@ -287,7 +285,7 @@ def build_matchplay(pdata: dict, players: List[GamePlayer], basis: str) -> dict:
         if va == vb:
             halves += 1
             res = "halved"
-        elif (va < vb) == (basis == "scratch"):
+        elif va > vb:        # more Stableford points wins the hole
             a_wins += 1
             res = "A"
         else:
@@ -533,11 +531,38 @@ class GameIn(BaseModel):
     slope: float = 113.0
     main_game: str = "individual_stableford"
     side_game: Optional[str] = None
-    match_basis: str = "stableford"
+    match_basis: str = "better_ball"
     game_types: List[str] = []
     handicap_mode: str = "full"
     handicap_pct: float = 100.0
     players: List[GamePlayerIn] = []
+
+
+def validate_lineup(types, players):
+    """Return an error string if team/player counts are invalid for the chosen formats."""
+    team_sizes = {}
+    for p in players:
+        if p.team is not None:
+            team_sizes[p.team] = team_sizes.get(p.team, 0) + 1
+    n_teams = len(team_sizes)
+    sizes = list(team_sizes.values())
+    if "match_play" in types:
+        # Singles (exactly 2 players, no teams) OR exactly 2 equal-sized teams.
+        if n_teams == 0:
+            if len(players) != 2:
+                return "Match play needs exactly 2 players (singles) or 2 balanced teams."
+        elif n_teams == 2:
+            if sizes[0] != sizes[1]:
+                return (f"Match play teams must be balanced — you have "
+                        f"{sizes[0]} v {sizes[1]} players. Assign equal numbers to each team.")
+        else:
+            return f"Match play needs exactly 2 teams, but {n_teams} teams are assigned."
+    if "better_ball_stableford" in types:
+        if n_teams < 2:
+            return "Better-ball needs at least 2 teams. Assign players to teams."
+        if any(s < 1 for s in sizes):
+            return "Each team needs at least one player."
+    return None
 
 
 @app.post("/api/games")
@@ -546,11 +571,14 @@ def create_game(body: GameIn, db: Session = Depends(get_db)):
     main = body.main_game or "individual_stableford"
     side = body.side_game if body.side_game and body.side_game != main else None
     types = [main] + ([side] if side else [])
+    err = validate_lineup(types, body.players)
+    if err:
+        raise HTTPException(422, err)
     g = Game(token=token, name=body.name, course_name=body.course_name,
              par_json=json.dumps(body.par), si_json=json.dumps(body.si),
              tee_name=body.tee_name, rating=body.rating, slope=body.slope,
              game_types_json=json.dumps(types), main_game=main, side_game=side,
-             match_basis=body.match_basis or "stableford",
+             match_basis=body.match_basis or "better_ball",
              handicap_mode=body.handicap_mode, handicap_pct=body.handicap_pct)
     db.add(g)
     db.commit()
