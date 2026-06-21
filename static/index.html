@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ScratchCard — Golf Scoring</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#0f172a; color:#e2e8f0; font-family:system-ui,-apple-system,sans-serif; }
+  .card { background:#1e293b; border:1px solid #334155; border-radius:1rem; }
+  .input { background:#0f172a; border:1px solid #334155; border-radius:0.5rem; color:#e2e8f0;
+           padding:0.55rem 0.75rem; width:100%; outline:none; }
+  .input:focus { border-color:#22c55e; box-shadow:0 0 0 3px rgba(34,197,94,0.15); }
+  .btn { border-radius:0.5rem; padding:0.6rem 1.1rem; font-weight:600; cursor:pointer;
+         transition:all .15s; border:none; font-size:0.95rem; }
+  .btn-primary { background:#22c55e; color:#052e16; }
+  .btn-primary:hover { background:#16a34a; }
+  .btn-ghost { background:#0f172a; color:#e2e8f0; border:1px solid #334155; }
+  .btn-ghost:hover { border-color:#22c55e; }
+  select.input option { background:#1e293b; }
+  .page { display:none; }
+  .page.active { display:block; }
+  .toast { position:fixed; bottom:1.5rem; left:50%; transform:translateX(-50%) translateY(4rem);
+           background:#22c55e; color:#052e16; padding:.7rem 1.2rem; border-radius:.6rem;
+           font-weight:600; opacity:0; transition:all .3s; z-index:50; }
+  .toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
+  .toast.error { background:#ef4444; color:white; }
+  .chip { display:inline-flex; align-items:center; gap:.3rem; padding:.3rem .7rem; border-radius:999px;
+          background:#0f172a; border:1px solid #334155; cursor:pointer; font-size:.85rem; }
+  .chip.on { background:#14532d; border-color:#22c55e; color:#bbf7d0; }
+  table { border-collapse:collapse; width:100%; }
+  th,td { padding:.5rem .55rem; text-align:center; }
+  thead th { color:#94a3b8; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; }
+  tbody tr { border-top:1px solid #1e293b; }
+  .holegrid button { aspect-ratio:1; border-radius:.5rem; border:1px solid #334155; background:#0f172a;
+           color:#e2e8f0; font-weight:600; cursor:pointer; font-size:.85rem; }
+  .holegrid button.cur { background:#22c55e; color:#052e16; border-color:#22c55e; }
+  .holegrid button.done { background:#14532d; border-color:#166534; color:#bbf7d0; }
+  h1,h2,h3 { color:#f1f5f9; }
+  a { color:#4ade80; }
+</style>
+</head>
+<body class="min-h-screen">
+<div id="toast" class="toast"></div>
+
+<div class="max-w-3xl mx-auto px-4 py-6">
+  <header class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-2">
+      <span style="font-size:1.6rem">⛳</span>
+      <h1 class="text-2xl font-bold">ScratchCard</h1>
+    </div>
+    <button id="homeBtn" class="btn btn-ghost" onclick="goHome()" style="display:none">New round</button>
+  </header>
+
+  <!-- ===================== HOME ===================== -->
+  <div id="pageHome" class="page active">
+    <div class="card p-6 mb-4">
+      <h2 class="text-xl font-bold mb-1">Set up a round</h2>
+      <p class="text-slate-400 text-sm mb-4">Add players, pick formats, choose your course and tees, then share a link so everyone can enter scores.</p>
+      <button class="btn btn-primary" onclick="startSetup()">Start new round</button>
+    </div>
+    <div class="card p-6">
+      <h3 class="font-semibold mb-2">Join a round</h3>
+      <p class="text-slate-400 text-sm mb-3">Paste a share link or code to enter scores.</p>
+      <div class="flex gap-2">
+        <input id="joinCode" class="input" placeholder="link or code" />
+        <button class="btn btn-ghost" onclick="joinByCode()">Join</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== SETUP ===================== -->
+  <div id="pageSetup" class="page">
+    <div class="card p-5 mb-4">
+      <label class="text-sm text-slate-400">Round name</label>
+      <input id="roundName" class="input mt-1" value="Saturday Round" />
+    </div>
+
+    <!-- Course -->
+    <div class="card p-5 mb-4">
+      <h3 class="font-semibold mb-3">1 · Course</h3>
+      <div class="flex gap-2 mb-3 flex-wrap">
+        <button class="chip" id="tabNearby" onclick="courseTab('nearby')">📍 Near me</button>
+        <button class="chip" id="tabSaved" onclick="courseTab('saved')">⭐ Saved</button>
+        <button class="chip on" id="tabManual" onclick="courseTab('manual')">✏️ Manual</button>
+      </div>
+
+      <div id="paneNearby" style="display:none">
+        <button class="btn btn-ghost mb-2" onclick="findNearby()">Find courses near me</button>
+        <div id="nearbyList" class="space-y-1 text-sm"></div>
+      </div>
+      <div id="paneSaved" style="display:none">
+        <select id="savedCourse" class="input" onchange="loadSavedCourse()"><option value="">Select a saved course…</option></select>
+      </div>
+
+      <label class="text-sm text-slate-400">Course name</label>
+      <input id="courseName" class="input mt-1 mb-3" placeholder="e.g. Royal Cape Golf Club" />
+
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm text-slate-400">Holes (par &amp; stroke index)</span>
+        <button class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.8rem" onclick="loadStandard()">Load standard par 72</button>
+      </div>
+      <div id="holesEditor" class="grid grid-cols-2 gap-2 mb-2"></div>
+      <p class="text-xs text-slate-500" id="parTotal"></p>
+    </div>
+
+    <!-- Tees -->
+    <div class="card p-5 mb-4">
+      <h3 class="font-semibold mb-1">2 · Tees</h3>
+      <p class="text-xs text-slate-500 mb-3">Course handicaps recalculate when you pick a tee (rating &amp; slope).</p>
+      <div id="teesList" class="space-y-2 mb-2"></div>
+      <button class="btn btn-ghost" style="padding:.3rem .7rem;font-size:.85rem" onclick="addTee()">+ Add tee</button>
+    </div>
+
+    <!-- Formats -->
+    <div class="card p-5 mb-4">
+      <h3 class="font-semibold mb-3">3 · Formats</h3>
+      <div class="flex gap-2 flex-wrap" id="formatChips">
+        <button class="chip on" data-fmt="individual_stableford" onclick="toggleFmt(this)">Individual Stableford</button>
+        <button class="chip" data-fmt="better_ball_stableford" onclick="toggleFmt(this)">Better-ball Team Stableford</button>
+        <button class="chip" data-fmt="skins" onclick="toggleFmt(this)">Skins</button>
+      </div>
+    </div>
+
+    <!-- Handicap mode -->
+    <div class="card p-5 mb-4">
+      <h3 class="font-semibold mb-3">4 · Handicap allowance</h3>
+      <div class="space-y-2 text-sm">
+        <label class="flex items-center gap-2"><input type="radio" name="hmode" value="full" checked onchange="onModeChange()"> Straight up (full course handicap)</label>
+        <label class="flex items-center gap-2"><input type="radio" name="hmode" value="off_lowest" onchange="onModeChange()"> Off the lowest — lowest plays 0, others play the full differential</label>
+        <label class="flex items-center gap-2"><input type="radio" name="hmode" value="off_lowest_pct" onchange="onModeChange()"> Percentage of the differential off the lowest</label>
+        <div id="pctRow" class="pl-6" style="display:none">
+          <span class="text-slate-400">Allowance</span>
+          <input id="hpct" class="input" style="width:90px;display:inline-block" type="number" value="90" /> %
+        </div>
+      </div>
+    </div>
+
+    <!-- Players -->
+    <div class="card p-5 mb-4">
+      <h3 class="font-semibold mb-1">5 · Players</h3>
+      <p class="text-xs text-slate-500 mb-3">Group = fourball. Course handicap auto-fills from the selected tee — edit if needed.</p>
+      <datalist id="savedPlayers"></datalist>
+      <div id="playersList" class="space-y-2 mb-3"></div>
+      <button class="btn btn-ghost" style="padding:.4rem .8rem;font-size:.85rem" onclick="addPlayer()">+ Add player</button>
+    </div>
+
+    <div class="flex gap-2 mb-10">
+      <button class="btn btn-ghost" onclick="goHome()">Cancel</button>
+      <button class="btn btn-primary flex-1" onclick="createGame()">Create round &amp; get share link</button>
+    </div>
+  </div>
+
+  <!-- ===================== SHARE ===================== -->
+  <div id="pageShare" class="page">
+    <div class="card p-6 mb-4 text-center">
+      <div style="font-size:2.5rem">🎉</div>
+      <h2 class="text-xl font-bold mb-1">Round is ready</h2>
+      <p class="text-slate-400 text-sm mb-4">Share this link — anyone can open it to enter scores.</p>
+      <div class="flex gap-2">
+        <input id="shareLink" class="input" readonly />
+        <button class="btn btn-primary" onclick="copyLink()">Copy</button>
+      </div>
+      <button class="btn btn-ghost mt-4" onclick="openScorecard()">Open scorecard →</button>
+    </div>
+  </div>
+
+  <!-- ===================== PLAY ===================== -->
+  <div id="pagePlay" class="page">
+    <div class="card p-4 mb-3">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 id="playCourse" class="font-bold"></h2>
+          <p id="playTee" class="text-xs text-slate-400"></p>
+        </div>
+        <div class="flex gap-1">
+          <button class="btn btn-ghost" id="tabScore" onclick="playTab('score')">Score</button>
+          <button class="btn btn-ghost" id="tabBoard" onclick="playTab('board')">Leaderboard</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCORE ENTRY -->
+    <div id="paneScore">
+      <div class="card p-4 mb-3">
+        <div class="flex items-center justify-between mb-3">
+          <button class="btn btn-ghost" onclick="navHole(-1)">‹ Prev</button>
+          <div class="text-center">
+            <div class="text-xs text-slate-400">HOLE</div>
+            <div class="text-3xl font-bold leading-none" id="holeNum">1</div>
+            <div class="text-xs text-slate-400" id="holeInfo"></div>
+          </div>
+          <button class="btn btn-ghost" onclick="navHole(1)">Next ›</button>
+        </div>
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-xs text-slate-400">Group</span>
+          <select id="groupFilter" class="input" style="width:auto" onchange="renderScoreEntry()"></select>
+        </div>
+        <div id="scoreInputs" class="space-y-2"></div>
+      </div>
+      <div class="card p-4">
+        <div class="text-xs text-slate-400 mb-2">Jump to hole</div>
+        <div class="holegrid grid grid-cols-9 gap-1.5" id="holeGrid"></div>
+      </div>
+    </div>
+
+    <!-- LEADERBOARD -->
+    <div id="paneBoard" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+function showToast(msg, err=false){ const t=$('toast'); t.textContent=msg; t.className='toast show'+(err?' error':''); setTimeout(()=>t.classList.remove('show'),2600); }
+async function api(method, path, body){
+  const opt={method, headers:{'Content-Type':'application/json'}};
+  if(body) opt.body=JSON.stringify(body);
+  const r=await fetch(path,opt);
+  if(!r.ok){ const e=await r.text(); throw new Error(e); }
+  return r.json();
+}
+function show(page){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('active')); $(page).classList.add('active'); window.scrollTo(0,0); }
+
+// ---------- state ----------
+let S = { holes:[], tees:[], activeTee:0, formats:['individual_stableford'], players:[], savedPlayers:[], savedCourses:[] };
+let G = null;       // loaded game state for play
+let curHole = 1, curGroup = 'all';
+
+// ---------- home / nav ----------
+function goHome(){ history.pushState({},'', '/'); show('pageHome'); $('homeBtn').style.display='none'; }
+function joinByCode(){
+  let v=$('joinCode').value.trim();
+  const m=v.match(/\/g\/([a-z0-9]+)/i); if(m) v=m[1];
+  if(v) loadGame(v);
+}
+
+// ---------- setup ----------
+async function startSetup(){
+  show('pageSetup'); $('homeBtn').style.display='inline-block';
+  if(!S.holes.length) loadStandard();
+  if(!S.tees.length){ S.tees=[{name:'White', rating:72, slope:113}]; }
+  renderTees();
+  if(!S.players.length){ S.players=[blankPlayer(),blankPlayer()]; }
+  renderPlayers();
+  try{
+    S.savedPlayers = await api('GET','/api/players');
+    $('savedPlayers').innerHTML = S.savedPlayers.map(p=>`<option value="${p.name}">`).join('');
+    S.savedCourses = await api('GET','/api/courses');
+    $('savedCourse').innerHTML = '<option value="">Select a saved course…</option>'+
+      S.savedCourses.map((c,i)=>`<option value="${i}">${c.name}</option>`).join('');
+  }catch(e){}
+}
+function courseTab(t){
+  ['nearby','saved','manual'].forEach(x=>{ $('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('on', x===t); });
+  $('paneNearby').style.display = t==='nearby'?'block':'none';
+  $('paneSaved').style.display = t==='saved'?'block':'none';
+}
+function loadStandard(){
+  const pars=[4,4,5,3,4,4,3,5,4, 4,4,5,3,4,4,3,5,4];
+  S.holes = pars.map((p,i)=>({par:p, si:i+1}));
+  renderHoles();
+}
+function renderHoles(){
+  const el=$('holesEditor'); el.innerHTML='';
+  S.holes.forEach((h,i)=>{
+    el.insertAdjacentHTML('beforeend',
+     `<div class="flex items-center gap-1 text-sm" style="background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.3rem .5rem">
+        <span style="width:1.4rem;color:#64748b">${i+1}</span>
+        <span class="text-xs text-slate-500">P</span>
+        <input class="input" style="width:3rem;padding:.25rem" type="number" value="${h.par}" onchange="S.holes[${i}].par=+this.value;updateParTotal()">
+        <span class="text-xs text-slate-500">SI</span>
+        <input class="input" style="width:3rem;padding:.25rem" type="number" value="${h.si}" onchange="S.holes[${i}].si=+this.value">
+      </div>`);
+  });
+  updateParTotal();
+}
+function updateParTotal(){
+  const t=S.holes.reduce((a,h)=>a+(+h.par||0),0);
+  $('parTotal').textContent = `Par total: ${t} · ${S.holes.length} holes`;
+  recalcAllCH();
+}
+function renderTees(){
+  const el=$('teesList'); el.innerHTML='';
+  S.tees.forEach((t,i)=>{
+    el.insertAdjacentHTML('beforeend',
+     `<div class="flex items-center gap-2" style="background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.4rem .5rem">
+        <input type="radio" name="activeTee" ${i===S.activeTee?'checked':''} onchange="S.activeTee=${i};recalcAllCH()">
+        <input class="input" style="flex:1" placeholder="Tee" value="${t.name}" onchange="S.tees[${i}].name=this.value">
+        <span class="text-xs text-slate-500">CR</span>
+        <input class="input" style="width:4rem" type="number" step="0.1" value="${t.rating}" onchange="S.tees[${i}].rating=+this.value;recalcAllCH()">
+        <span class="text-xs text-slate-500">Slope</span>
+        <input class="input" style="width:4rem" type="number" value="${t.slope}" onchange="S.tees[${i}].slope=+this.value;recalcAllCH()">
+        <button class="btn btn-ghost" style="padding:.2rem .5rem" onclick="S.tees.splice(${i},1);if(S.activeTee>=S.tees.length)S.activeTee=0;renderTees();recalcAllCH()">✕</button>
+      </div>`);
+  });
+}
+function addTee(){ S.tees.push({name:'Tee', rating:72, slope:113}); renderTees(); }
+
+function toggleFmt(btn){
+  btn.classList.toggle('on');
+  S.formats = [...document.querySelectorAll('#formatChips .chip.on')].map(b=>b.dataset.fmt);
+  renderPlayers();
+}
+function onModeChange(){
+  const m=document.querySelector('input[name=hmode]:checked').value;
+  $('pctRow').style.display = m==='off_lowest_pct'?'block':'none';
+}
+
+function blankPlayer(){ return {name:'', handicap_index:0, course_handicap:0, group_no:1, team:null}; }
+function parTotal(){ return S.holes.reduce((a,h)=>a+(+h.par||0),0); }
+function calcCH(idx){
+  const t=S.tees[S.activeTee]; if(!t) return Math.round(idx);
+  return Math.round(idx*(t.slope/113)+(t.rating-parTotal()));
+}
+function recalcAllCH(){
+  S.players.forEach(p=>{ p.course_handicap = calcCH(+p.handicap_index||0); });
+  renderPlayers();
+}
+function renderPlayers(){
+  const teamOn = S.formats.includes('better_ball_stableford');
+  const el=$('playersList'); el.innerHTML='';
+  S.players.forEach((p,i)=>{
+    el.insertAdjacentHTML('beforeend',
+     `<div style="background:#0f172a;border:1px solid #334155;border-radius:.6rem;padding:.6rem">
+        <div class="flex gap-2 items-center mb-2">
+          <input class="input" list="savedPlayers" placeholder="Name" value="${p.name}" onchange="onPlayerName(${i},this.value)">
+          <button class="btn btn-ghost" style="padding:.3rem .6rem" onclick="S.players.splice(${i},1);renderPlayers()">✕</button>
+        </div>
+        <div class="grid grid-cols-${teamOn?4:3} gap-2 text-sm">
+          <div><div class="text-xs text-slate-500">HCP Index</div>
+            <input class="input" type="number" step="0.1" value="${p.handicap_index}" onchange="S.players[${i}].handicap_index=+this.value;S.players[${i}].course_handicap=calcCH(+this.value);renderPlayers()"></div>
+          <div><div class="text-xs text-slate-500">Course HCP</div>
+            <input class="input" type="number" value="${p.course_handicap}" onchange="S.players[${i}].course_handicap=+this.value"></div>
+          <div><div class="text-xs text-slate-500">Group</div>
+            <input class="input" type="number" min="1" value="${p.group_no}" onchange="S.players[${i}].group_no=+this.value"></div>
+          ${teamOn?`<div><div class="text-xs text-slate-500">Team</div>
+            <input class="input" type="number" min="1" value="${p.team||''}" placeholder="—" onchange="S.players[${i}].team=this.value?+this.value:null"></div>`:''}
+        </div>
+      </div>`);
+  });
+}
+function onPlayerName(i,val){
+  S.players[i].name=val;
+  const sp=S.savedPlayers.find(x=>x.name.toLowerCase()===val.trim().toLowerCase());
+  if(sp){ S.players[i].player_id=sp.id; S.players[i].handicap_index=sp.handicap_index; S.players[i].course_handicap=calcCH(sp.handicap_index); renderPlayers(); }
+}
+function addPlayer(){ const last=S.players[S.players.length-1]; S.players.push({...blankPlayer(), group_no:last?last.group_no:1}); renderPlayers(); }
+
+async function findNearby(){
+  if(!navigator.geolocation){ showToast('No location support',true); return; }
+  showToast('Locating…');
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    try{
+      const {latitude,longitude}=pos.coords;
+      const list=await api('GET',`/api/courses/nearby?lat=${latitude}&lon=${longitude}`);
+      if(!list.length){ $('nearbyList').innerHTML='<p class="text-slate-500">No courses found nearby.</p>'; return; }
+      $('nearbyList').innerHTML=list.map(c=>
+        `<div class="flex items-center justify-between" style="background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.45rem .6rem">
+           <span>${c.name}</span>
+           <button class="btn btn-ghost" style="padding:.2rem .6rem;font-size:.8rem" onclick="pickCourse('${c.name.replace(/'/g,'')}')">Use</button>
+         </div>`).join('');
+    }catch(e){ showToast('Lookup failed',true); }
+  }, ()=>showToast('Location denied',true), {timeout:10000});
+}
+function pickCourse(name){ $('courseName').value=name; showToast('Course set — add holes/tees'); }
+function loadSavedCourse(){
+  const i=$('savedCourse').value; if(i==='') return;
+  const c=S.savedCourses[i];
+  $('courseName').value=c.name;
+  if(c.par&&c.par.length){ S.holes=c.par.map((p,k)=>({par:p, si:(c.si&&c.si[k])||k+1})); renderHoles(); }
+  if(c.tees&&c.tees.length){ S.tees=c.tees.map(t=>({...t})); S.activeTee=0; renderTees(); recalcAllCH(); }
+}
+
+async function createGame(){
+  const name=$('courseName').value.trim();
+  if(!name){ showToast('Enter a course name',true); return; }
+  const players=S.players.filter(p=>p.name.trim());
+  if(players.length<1){ showToast('Add at least one player',true); return; }
+  for(const p of players){
+    if(!p.player_id){
+      try{ const np=await api('POST','/api/players',{name:p.name.trim(), handicap_index:+p.handicap_index||0}); p.player_id=np.id; }catch(e){}
+    }
+  }
+  try{ await api('POST','/api/courses',{name, par:S.holes.map(h=>+h.par), si:S.holes.map(h=>+h.si), tees:S.tees}); }catch(e){}
+  const mode=document.querySelector('input[name=hmode]:checked').value;
+  const body={
+    name:$('roundName').value||'Round', course_name:name,
+    par:S.holes.map(h=>+h.par), si:S.holes.map(h=>+h.si),
+    tee_name:(S.tees[S.activeTee]||{}).name||'', rating:(S.tees[S.activeTee]||{}).rating||72, slope:(S.tees[S.activeTee]||{}).slope||113,
+    game_types:S.formats, handicap_mode:mode, handicap_pct:+($('hpct').value||100),
+    players:players.map(p=>({player_id:p.player_id||null, name:p.name.trim(), handicap_index:+p.handicap_index||0,
+                             course_handicap:+p.course_handicap||0, team:p.team||null, group_no:+p.group_no||1}))
+  };
+  try{
+    const r=await api('POST','/api/games',body);
+    const link=location.origin+'/g/'+r.token;
+    $('shareLink').value=link;
+    window._token=r.token;
+    show('pageShare');
+  }catch(e){ showToast('Could not create round',true); }
+}
+function copyLink(){ const i=$('shareLink'); i.select(); navigator.clipboard.writeText(i.value); showToast('Link copied'); }
+function openScorecard(){ loadGame(window._token); }
+
+// ---------- play ----------
+async function loadGame(token){
+  try{
+    G=await api('GET','/api/games/'+token);
+  }catch(e){ showToast('Round not found',true); goHome(); return; }
+  window._token=token;
+  history.pushState({},'', '/g/'+token);
+  show('pagePlay'); $('homeBtn').style.display='inline-block';
+  $('playCourse').textContent=G.course_name;
+  const modeTxt={full:'Full handicap', off_lowest:'Off the lowest', off_lowest_pct:`${G.handicap_pct}% off lowest`}[G.handicap_mode]||'';
+  $('playTee').textContent=`${G.tee_name?G.tee_name+' tees · ':''}CR ${G.rating} / Slope ${G.slope} · ${modeTxt}`;
+  const groups=[...new Set(G.players.map(p=>p.group_no))].sort((a,b)=>a-b);
+  $('groupFilter').innerHTML='<option value="all">All groups</option>'+groups.map(g=>`<option value="${g}">Group ${g}</option>`).join('');
+  playTab('score');
+  renderHoleNav(); renderScoreEntry();
+}
+function playTab(t){
+  $('paneScore').style.display=t==='score'?'block':'none';
+  $('paneBoard').style.display=t==='board'?'block':'none';
+  $('tabScore').classList.toggle('btn-primary', t==='score');
+  $('tabBoard').classList.toggle('btn-primary', t==='board');
+  if(t==='board') renderBoard();
+}
+function holeData(h){ return { par:G.par[h-1]||4, si:G.si[h-1]||h }; }
+function navHole(d){ curHole=Math.min(G.par.length, Math.max(1, curHole+d)); renderHoleNav(); renderScoreEntry(); }
+function gotoHole(h){ curHole=h; renderHoleNav(); renderScoreEntry(); }
+function renderHoleNav(){
+  $('holeNum').textContent=curHole;
+  const hd=holeData(curHole);
+  $('holeInfo').textContent=`Par ${hd.par} · SI ${hd.si}`;
+  const grid=$('holeGrid'); grid.innerHTML='';
+  const lb=G.leaderboard.individual;
+  for(let h=1; h<=G.par.length; h++){
+    const everyone=lb.length>0 && lb.every(p=>p.holes[h-1].gross!=null);
+    const cls=h===curHole?'cur':(everyone?'done':'');
+    grid.insertAdjacentHTML('beforeend',`<button class="${cls}" onclick="gotoHole(${h})">${h}</button>`);
+  }
+}
+function curScoreFor(gpId,h){
+  const p=G.leaderboard.individual.find(x=>x.game_player_id===gpId);
+  return p? p.holes[h-1].gross : null;
+}
+function renderScoreEntry(){
+  curGroup=$('groupFilter').value;
+  const players=G.players.filter(p=>curGroup==='all'||String(p.group_no)===curGroup);
+  const hd=holeData(curHole);
+  const el=$('scoreInputs'); el.innerHTML='';
+  players.forEach(p=>{
+    const lbp=G.leaderboard.individual.find(x=>x.game_player_id===p.id);
+    const strokes=lbp?lbp.holes[curHole-1].strokes:0;
+    const gross=curScoreFor(p.id,curHole);
+    const pts=lbp?lbp.holes[curHole-1].points:null;
+    el.insertAdjacentHTML('beforeend',
+     `<div class="flex items-center gap-3" style="background:#0f172a;border:1px solid #334155;border-radius:.6rem;padding:.55rem .7rem">
+        <div style="flex:1">
+          <div class="font-semibold">${p.name}</div>
+          <div class="text-xs text-slate-500">PH ${lbp?lbp.playing_handicap:p.course_handicap} · gets ${strokes} stroke${strokes===1?'':'s'} ${pts!=null?'· '+pts+' pts':''}</div>
+        </div>
+        <button class="btn btn-ghost" style="padding:.3rem .7rem" onclick="bump(${p.id},-1)">−</button>
+        <input class="input" style="width:3.8rem;text-align:center;font-size:1.1rem" type="number" id="sc_${p.id}" value="${gross??''}" placeholder="${hd.par}" onchange="saveScore(${p.id},this.value)">
+        <button class="btn btn-ghost" style="padding:.3rem .7rem" onclick="bump(${p.id},1)">+</button>
+      </div>`);
+  });
+}
+function bump(id,d){
+  const inp=$('sc_'+id); const hd=holeData(curHole);
+  let v=parseInt(inp.value||hd.par)+d; if(v<1)v=1; inp.value=v; saveScore(id,v);
+}
+async function saveScore(gpId,val){
+  const gross=val===''||val==null?null:parseInt(val);
+  try{
+    await api('POST',`/api/games/${window._token}/scores`,{game_player_id:gpId, hole:curHole, gross});
+    G=await api('GET','/api/games/'+window._token);
+    renderHoleNav();
+    // refresh just the meta line for this player
+    const lbp=G.leaderboard.individual.find(x=>x.game_player_id===gpId);
+    if(lbp){ renderScoreMeta(gpId, lbp); }
+  }catch(e){ showToast('Save failed',true); }
+}
+function renderScoreMeta(gpId, lbp){
+  const row=$('sc_'+gpId); if(!row) return;
+  const meta=row.closest('div').querySelector('.text-xs');
+  const h=lbp.holes[curHole-1];
+  if(meta) meta.innerHTML=`PH ${lbp.playing_handicap} · gets ${h.strokes} stroke${h.strokes===1?'':'s'} ${h.points!=null?'· '+h.points+' pts':''}`;
+}
+function renderBoard(){
+  const lb=G.leaderboard; const el=$('paneBoard'); let html='';
+  html+=`<div class="card p-4 mb-3"><h3 class="font-semibold mb-2">Individual Stableford <span class="text-xs text-slate-500">— all groups</span></h3>
+    <table><thead><tr><th style="text-align:left">Player</th><th>Grp</th><th>PH</th><th>Thru</th><th>Pts</th></tr></thead><tbody>`;
+  lb.individual.forEach((p,i)=>{
+    html+=`<tr><td style="text-align:left"><span class="text-slate-500">${i+1}.</span> ${p.name}</td>
+      <td class="text-slate-400">${p.group_no}</td><td class="text-slate-400">${p.playing_handicap}</td>
+      <td class="text-slate-400">${p.thru}</td><td class="font-bold" style="color:#4ade80">${p.points}</td></tr>`;
+  });
+  html+='</tbody></table></div>';
+  if(lb.game_types.includes('better_ball_stableford') && lb.teams.length){
+    html+=`<div class="card p-4 mb-3"><h3 class="font-semibold mb-2">Better-ball Team Stableford</h3>
+      <table><thead><tr><th style="text-align:left">Team</th><th>Players</th><th>Pts</th></tr></thead><tbody>`;
+    lb.teams.forEach((t,i)=>{
+      html+=`<tr><td style="text-align:left"><span class="text-slate-500">${i+1}.</span> Team ${t.team}</td>
+        <td class="text-slate-400 text-sm">${t.members.join(' & ')}</td>
+        <td class="font-bold" style="color:#4ade80">${t.points}</td></tr>`;
+    });
+    html+='</tbody></table></div>';
+  }
+  if(lb.game_types.includes('skins') && lb.skins){
+    html+=`<div class="card p-4 mb-3"><h3 class="font-semibold mb-2">Skins</h3>
+      <table><thead><tr><th style="text-align:left">Player</th><th>Skins</th></tr></thead><tbody>`;
+    lb.skins.board.forEach(r=>{ html+=`<tr><td style="text-align:left">${r.name}</td><td class="font-bold" style="color:#4ade80">${r.skins}</td></tr>`; });
+    html+='</tbody></table>';
+    if(lb.skins.carry>0) html+=`<p class="text-xs text-amber-400 mt-2">${lb.skins.carry} skin(s) currently carried over.</p>`;
+    html+=`<div class="mt-3 text-xs text-slate-400 flex flex-wrap gap-1">`;
+    lb.skins.holes.forEach(h=>{
+      const lbl=h.winner?`H${h.hole}:${h.winner}`:(h.carried?`H${h.hole}:carry`:`H${h.hole}:—`);
+      const col=h.winner?'#14532d':'#334155';
+      html+=`<span style="background:${col};border-radius:.4rem;padding:.15rem .4rem">${lbl}</span>`;
+    });
+    html+='</div></div>';
+  }
+  el.innerHTML=html;
+}
+
+// ---------- boot ----------
+window.addEventListener('popstate', route);
+function route(){
+  const m=location.pathname.match(/\/g\/([a-z0-9]+)/i);
+  if(m){ loadGame(m[1]); } else { show('pageHome'); $('homeBtn').style.display='none'; }
+}
+route();
+</script>
+</body>
+</html>
