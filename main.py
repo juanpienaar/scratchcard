@@ -53,7 +53,9 @@ class Game(Base):
     tee_name = Column(String(80), default="")
     rating = Column(Float, default=72.0)
     slope = Column(Float, default=113.0)
-    game_types_json = Column(Text, default="[]")   # subset of individual_stableford, better_ball_stableford, skins
+    game_types_json = Column(Text, default="[]")   # [main, side] subset
+    main_game = Column(String(40), default="individual_stableford")
+    side_game = Column(String(40), nullable=True)
     handicap_mode = Column(String(40), default="full")  # full | off_lowest | off_lowest_pct
     handicap_pct = Column(Float, default=100.0)
     created_at = Column(String(40), default=lambda: datetime.utcnow().isoformat())
@@ -249,6 +251,8 @@ def startup():
             "ALTER TABLE games ADD COLUMN handicap_pct FLOAT DEFAULT 100.0",
             "ALTER TABLE game_players ADD COLUMN group_no INTEGER DEFAULT 1",
             "ALTER TABLE courses ADD COLUMN is_favourite INTEGER DEFAULT 0",
+            "ALTER TABLE games ADD COLUMN main_game VARCHAR(40) DEFAULT 'individual_stableford'",
+            "ALTER TABLE games ADD COLUMN side_game VARCHAR(40)",
         ]:
             try:
                 conn.execute(text(stmt))
@@ -448,6 +452,8 @@ class GameIn(BaseModel):
     tee_name: str = ""
     rating: float = 72.0
     slope: float = 113.0
+    main_game: str = "individual_stableford"
+    side_game: Optional[str] = None
     game_types: List[str] = []
     handicap_mode: str = "full"
     handicap_pct: float = 100.0
@@ -457,10 +463,13 @@ class GameIn(BaseModel):
 @app.post("/api/games")
 def create_game(body: GameIn, db: Session = Depends(get_db)):
     token = uuid.uuid4().hex[:10]
+    main = body.main_game or "individual_stableford"
+    side = body.side_game if body.side_game and body.side_game != main else None
+    types = [main] + ([side] if side else [])
     g = Game(token=token, name=body.name, course_name=body.course_name,
              par_json=json.dumps(body.par), si_json=json.dumps(body.si),
              tee_name=body.tee_name, rating=body.rating, slope=body.slope,
-             game_types_json=json.dumps(body.game_types),
+             game_types_json=json.dumps(types), main_game=main, side_game=side,
              handicap_mode=body.handicap_mode, handicap_pct=body.handicap_pct)
     db.add(g)
     db.commit()
@@ -485,6 +494,7 @@ def _game_state(token: str, db: Session) -> dict:
         "token": g.token, "name": g.name, "course_name": g.course_name,
         "tee_name": g.tee_name, "rating": g.rating, "slope": g.slope,
         "game_types": json.loads(g.game_types_json),
+        "main_game": g.main_game, "side_game": g.side_game,
         "handicap_mode": g.handicap_mode, "handicap_pct": g.handicap_pct,
         "par": json.loads(g.par_json), "si": json.loads(g.si_json),
         "players": [{"id": p.id, "name": p.name, "handicap_index": p.handicap_index,

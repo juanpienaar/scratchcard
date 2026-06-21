@@ -126,12 +126,24 @@
 
     <!-- Formats -->
     <div class="card p-5 mb-4">
-      <h3 class="font-semibold mb-3">3 · Formats</h3>
-      <div class="flex gap-2 flex-wrap" id="formatChips">
-        <button class="chip on" data-fmt="individual_stableford" onclick="toggleFmt(this)">Individual Stableford</button>
-        <button class="chip" data-fmt="better_ball_stableford" onclick="toggleFmt(this)">Better-ball Team Stableford</button>
-        <button class="chip" data-fmt="skins" onclick="toggleFmt(this)">Skins</button>
+      <h3 class="font-semibold mb-3">3 · Game format</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm text-slate-400">Main game</label>
+          <select id="mainGame" class="input mt-1" onchange="onFormatChange()">
+            <option value="individual_stableford">Individual Stableford</option>
+            <option value="better_ball_stableford">Better-ball Team Stableford</option>
+            <option value="skins">Skins</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-sm text-slate-400">Side game</label>
+          <select id="sideGame" class="input mt-1" onchange="onFormatChange()">
+            <option value="">None</option>
+          </select>
+        </div>
       </div>
+      <p class="text-xs text-slate-500 mt-2">Pick one main event and, optionally, one side game (e.g. better-ball team as the main, individual Stableford as the side).</p>
     </div>
 
     <!-- Handicap mode -->
@@ -253,6 +265,7 @@ async function startSetup(){
   if(!S.tees.length){ S.tees=[{name:'White', rating:72, slope:113}]; }
   renderTees();
   if(!S.players.length){ S.players=[blankPlayer(),blankPlayer()]; }
+  onFormatChange();
   renderPlayers();
   renderCourse();
   try{
@@ -386,9 +399,17 @@ function renderTees(){
 }
 function addTee(){ S.tees.push({name:'Tee', rating:72, slope:113}); renderTees(); }
 
-function toggleFmt(btn){
-  btn.classList.toggle('on');
-  S.formats = [...document.querySelectorAll('#formatChips .chip.on')].map(b=>b.dataset.fmt);
+const FMT_LABELS={individual_stableford:'Individual Stableford', better_ball_stableford:'Better-ball Team Stableford', skins:'Skins'};
+function onFormatChange(){
+  const main=$('mainGame').value;
+  const cur=$('sideGame').value;
+  // rebuild side options excluding the main game
+  const opts=['<option value="">None</option>'].concat(
+    Object.keys(FMT_LABELS).filter(f=>f!==main).map(f=>`<option value="${f}">${FMT_LABELS[f]}</option>`));
+  $('sideGame').innerHTML=opts.join('');
+  $('sideGame').value = (cur && cur!==main) ? cur : '';
+  const side=$('sideGame').value;
+  S.formats=[main].concat(side?[side]:[]);
   renderPlayers();
 }
 function onModeChange(){
@@ -471,7 +492,8 @@ async function createGame(){
     name:$('roundName').value||'Round', course_name:name,
     par:S.holes.map(h=>+h.par), si:S.holes.map(h=>+h.si),
     tee_name:(S.tees[S.activeTee]||{}).name||'', rating:(S.tees[S.activeTee]||{}).rating||72, slope:(S.tees[S.activeTee]||{}).slope||113,
-    game_types:S.formats, handicap_mode:mode, handicap_pct:+($('hpct').value||100),
+    main_game:$('mainGame').value, side_game:$('sideGame').value||null,
+    handicap_mode:mode, handicap_pct:+($('hpct').value||100),
     players:players.map(p=>({player_id:p.player_id||null, name:p.name.trim(), handicap_index:+p.handicap_index||0,
                              course_handicap:+p.course_handicap||0, team:p.team||null, group_no:+p.group_no||1}))
   };
@@ -496,7 +518,8 @@ async function loadGame(token){
   show('pagePlay'); $('homeBtn').style.display='inline-block';
   $('playCourse').textContent=G.course_name;
   const modeTxt={full:'Full handicap', off_lowest:'Off the lowest', off_lowest_pct:`${G.handicap_pct}% off lowest`}[G.handicap_mode]||'';
-  $('playTee').textContent=`${G.tee_name?G.tee_name+' tees · ':''}CR ${G.rating} / Slope ${G.slope} · ${modeTxt}`;
+  const fmtTxt=FMT_LABELS[G.main_game]+(G.side_game?` + ${FMT_LABELS[G.side_game]} (side)`:'');
+  $('playTee').innerHTML=`${fmtTxt}<br>${G.tee_name?G.tee_name+' tees · ':''}CR ${G.rating} / Slope ${G.slope} · ${modeTxt}`;
   const groups=[...new Set(G.players.map(p=>p.group_no))].sort((a,b)=>a-b);
   $('groupFilter').innerHTML='<option value="all">All groups</option>'+groups.map(g=>`<option value="${g}">Group ${g}</option>`).join('');
   playTab('score');
@@ -510,8 +533,22 @@ function playTab(t){
   if(t==='board') renderBoard();
 }
 function holeData(h){ return { par:G.par[h-1]||4, si:G.si[h-1]||h }; }
-function navHole(d){ curHole=Math.min(G.par.length, Math.max(1, curHole+d)); renderHoleNav(); renderScoreEntry(); }
-function gotoHole(h){ curHole=h; renderHoleNav(); renderScoreEntry(); }
+async function commitHole(){
+  const inputs=[...document.querySelectorAll('#scoreInputs input[type=number]')];
+  const tasks=[];
+  inputs.forEach(inp=>{
+    const id=+inp.id.slice(3);
+    const gross = inp.value===''?null:parseInt(inp.value);
+    tasks.push(api('POST',`/api/games/${window._token}/scores`,{game_player_id:id, hole:curHole, gross}));
+  });
+  if(tasks.length){ try{ await Promise.all(tasks); G=await api('GET','/api/games/'+window._token); }catch(e){ showToast('Save failed',true); } }
+}
+async function navHole(d){
+  await commitHole();
+  curHole=Math.min(G.par.length, Math.max(1, curHole+d));
+  renderHoleNav(); renderScoreEntry();
+}
+async function gotoHole(h){ await commitHole(); curHole=h; renderHoleNav(); renderScoreEntry(); }
 function renderHoleNav(){
   $('holeNum').textContent=curHole;
   const hd=holeData(curHole);
@@ -571,41 +608,58 @@ function renderScoreMeta(gpId, lbp){
   const h=lbp.holes[curHole-1];
   if(meta) meta.innerHTML=`PH ${lbp.playing_handicap} · gets ${h.strokes} stroke${h.strokes===1?'':'s'} ${h.points!=null?'· '+h.points+' pts':''}`;
 }
-function renderBoard(){
-  const lb=G.leaderboard; const el=$('paneBoard'); let html='';
-  html+=`<div class="card p-4 mb-3"><h3 class="font-semibold mb-2">Individual Stableford <span class="text-xs text-slate-500">— all groups</span></h3>
+function fmtBadge(kind){
+  const main=kind==='MAIN';
+  return `<span style="background:${main?'#22c55e':'#334155'};color:${main?'#052e16':'#cbd5e1'};font-size:.62rem;font-weight:700;padding:.12rem .45rem;border-radius:.3rem;letter-spacing:.06em">${kind}</span>`;
+}
+function indivHTML(kind){
+  const lb=G.leaderboard;
+  let h=`<div class="card p-4 mb-3"><div class="flex items-center gap-2 mb-2">${fmtBadge(kind)}<h3 class="font-semibold">Individual Stableford</h3><span class="text-xs text-slate-500">all groups</span></div>
     <table><thead><tr><th style="text-align:left">Player</th><th>Grp</th><th>PH</th><th>Thru</th><th>Pts</th></tr></thead><tbody>`;
   lb.individual.forEach((p,i)=>{
-    html+=`<tr><td style="text-align:left"><span class="text-slate-500">${i+1}.</span> ${p.name}</td>
+    h+=`<tr><td style="text-align:left"><span class="text-slate-500">${i+1}.</span> ${p.name}</td>
       <td class="text-slate-400">${p.group_no}</td><td class="text-slate-400">${p.playing_handicap}</td>
       <td class="text-slate-400">${p.thru}</td><td class="font-bold" style="color:#4ade80">${p.points}</td></tr>`;
   });
-  html+='</tbody></table></div>';
-  if(lb.game_types.includes('better_ball_stableford') && lb.teams.length){
-    html+=`<div class="card p-4 mb-3"><h3 class="font-semibold mb-2">Better-ball Team Stableford</h3>
-      <table><thead><tr><th style="text-align:left">Team</th><th>Players</th><th>Pts</th></tr></thead><tbody>`;
-    lb.teams.forEach((t,i)=>{
-      html+=`<tr><td style="text-align:left"><span class="text-slate-500">${i+1}.</span> Team ${t.team}</td>
-        <td class="text-slate-400 text-sm">${t.members.join(' & ')}</td>
-        <td class="font-bold" style="color:#4ade80">${t.points}</td></tr>`;
-    });
-    html+='</tbody></table></div>';
-  }
-  if(lb.game_types.includes('skins') && lb.skins){
-    html+=`<div class="card p-4 mb-3"><h3 class="font-semibold mb-2">Skins</h3>
-      <table><thead><tr><th style="text-align:left">Player</th><th>Skins</th></tr></thead><tbody>`;
-    lb.skins.board.forEach(r=>{ html+=`<tr><td style="text-align:left">${r.name}</td><td class="font-bold" style="color:#4ade80">${r.skins}</td></tr>`; });
-    html+='</tbody></table>';
-    if(lb.skins.carry>0) html+=`<p class="text-xs text-amber-400 mt-2">${lb.skins.carry} skin(s) currently carried over.</p>`;
-    html+=`<div class="mt-3 text-xs text-slate-400 flex flex-wrap gap-1">`;
-    lb.skins.holes.forEach(h=>{
-      const lbl=h.winner?`H${h.hole}:${h.winner}`:(h.carried?`H${h.hole}:carry`:`H${h.hole}:—`);
-      const col=h.winner?'#14532d':'#334155';
-      html+=`<span style="background:${col};border-radius:.4rem;padding:.15rem .4rem">${lbl}</span>`;
-    });
-    html+='</div></div>';
-  }
-  el.innerHTML=html;
+  return h+'</tbody></table></div>';
+}
+function teamsHTML(kind){
+  const lb=G.leaderboard;
+  let h=`<div class="card p-4 mb-3"><div class="flex items-center gap-2 mb-2">${fmtBadge(kind)}<h3 class="font-semibold">Better-ball Team Stableford</h3></div>`;
+  if(!lb.teams.length){ return h+'<p class="text-slate-500 text-sm">Assign players to teams in setup to score this format.</p></div>'; }
+  h+=`<table><thead><tr><th style="text-align:left">Team</th><th>Players</th><th>Pts</th></tr></thead><tbody>`;
+  lb.teams.forEach((t,i)=>{
+    h+=`<tr><td style="text-align:left"><span class="text-slate-500">${i+1}.</span> Team ${t.team}</td>
+      <td class="text-slate-400 text-sm">${t.members.join(' & ')}</td>
+      <td class="font-bold" style="color:#4ade80">${t.points}</td></tr>`;
+  });
+  return h+'</tbody></table></div>';
+}
+function skinsHTML(kind){
+  const lb=G.leaderboard; if(!lb.skins) return '';
+  let h=`<div class="card p-4 mb-3"><div class="flex items-center gap-2 mb-2">${fmtBadge(kind)}<h3 class="font-semibold">Skins</h3></div>
+    <table><thead><tr><th style="text-align:left">Player</th><th>Skins</th></tr></thead><tbody>`;
+  lb.skins.board.forEach(r=>{ h+=`<tr><td style="text-align:left">${r.name}</td><td class="font-bold" style="color:#4ade80">${r.skins}</td></tr>`; });
+  h+='</tbody></table>';
+  if(lb.skins.carry>0) h+=`<p class="text-xs text-amber-400 mt-2">${lb.skins.carry} skin(s) currently carried over.</p>`;
+  h+=`<div class="mt-3 text-xs text-slate-400 flex flex-wrap gap-1">`;
+  lb.skins.holes.forEach(x=>{
+    const lbl=x.winner?`H${x.hole}:${x.winner}`:(x.carried?`H${x.hole}:carry`:`H${x.hole}:—`);
+    h+=`<span style="background:${x.winner?'#14532d':'#334155'};border-radius:.4rem;padding:.15rem .4rem">${lbl}</span>`;
+  });
+  return h+'</div></div>';
+}
+function sectionFor(fmt, kind){
+  if(fmt==='individual_stableford') return indivHTML(kind);
+  if(fmt==='better_ball_stableford') return teamsHTML(kind);
+  if(fmt==='skins') return skinsHTML(kind);
+  return '';
+}
+function renderBoard(){
+  const el=$('paneBoard'); let html='';
+  html+=sectionFor(G.main_game,'MAIN');
+  if(G.side_game) html+=sectionFor(G.side_game,'SIDE');
+  el.innerHTML=html||'<p class="text-slate-500">No formats selected.</p>';
 }
 
 // ---------- boot ----------
